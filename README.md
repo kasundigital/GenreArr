@@ -109,6 +109,12 @@ Add the instance in GenreArr. Copy its unique webhook path and add it in **Radar
 
 ## ☕ Support
 
-GenreArr is free and open source. Support development at https://buymeacoffee.com/kasundigital
+GenreArr is free and open source. If it helps you, you can support continued development:
+
+<a href="https://buymeacoffee.com/kasundigital" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="60">
+</a>
+
+**[☕ Support Kasun on Buy Me a Coffee](https://buymeacoffee.com/kasundigital)**
 
 Designed & Developed by **Kasun Indika** — https://www.kasunindika.com
