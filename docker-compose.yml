@@ -4,12 +4,12 @@ services:
     container_name: genrearr
     restart: unless-stopped
     ports:
-      - "3033:3033"
+      - "${GENREARR_PORT:-3033}:3033"
     environment:
-      - PORT=3033
-      - DATA_DIR=/data
-      - SECRET_KEY=change-this-secret
-      - ADMIN_PASSWORD=admin
-      - POLL_SECONDS=60
+      PORT: 3033
+      DATA_DIR: /data
+      SECRET_KEY: ${SECRET_KEY:-change-this-secret}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      POLL_SECONDS: 3600
     volumes:
       - ./data:/data
