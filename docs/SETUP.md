@@ -28,45 +28,58 @@ You need:
 
 > Start with a test library if possible. Keep **Dry Run** enabled until the Planner shows the paths you expect.
 
-## 1. Install GenreArr
+## 1. Install GenreArr — one command
 
-Open a terminal/SSH session on the Docker server:
+You do **not** need Git and you do not need to clone the repository.
 
-```bash
-git clone https://github.com/kasundigital/GenreArr.git
-cd GenreArr
-```
-
-Before starting, edit `docker-compose.yml`.
-
-Change these two values:
-
-```yaml
-- SECRET_KEY=replace-with-a-long-random-secret
-- ADMIN_PASSWORD=choose-a-strong-password
-```
-
-Do not leave the password as `admin` if GenreArr is reachable by other people.
-
-Start GenreArr:
+Make sure Docker and Docker Compose are installed, then paste this single command into your server terminal:
 
 ```bash
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
 ```
 
-Check that it is running:
+The installer automatically:
 
-```bash
-docker compose ps
-```
+1. Downloads the latest GenreArr source.
+2. Installs it under `/opt/genrearr`.
+3. Creates the persistent data directory.
+4. Generates a random security secret.
+5. Generates an admin password.
+6. Builds and starts GenreArr with Docker.
+7. Shows the URL and password when finished.
 
-Open this in a browser:
+You should see something similar to:
 
 ```text
-http://YOUR-SERVER-IP:3033
+✅ GenreArr is running
+🌐 Open: http://192.168.1.50:3033
+🔐 Admin password: YOUR-GENERATED-PASSWORD
+📁 Data: /opt/genrearr/data
 ```
 
-Log in using the password you placed in `ADMIN_PASSWORD`.
+Save the generated password somewhere safe.
+
+Open the displayed address in your browser and log in.
+
+### Updating GenreArr
+
+Run the same installer command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
+```
+
+Your existing configuration/database under `/opt/genrearr/data` and your generated `.env` credentials are retained.
+
+### Custom port
+
+If port 3033 is already used:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_PORT=3034 bash
+```
+
+Then open port `3034` instead.
 
 ## 2. Find your Radarr API key
 
