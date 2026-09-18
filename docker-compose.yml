@@ -1,0 +1,15 @@
+services:
+  genrearr:
+    build: .
+    container_name: genrearr
+    restart: unless-stopped
+    ports:
+      - "3033:3033"
+    environment:
+      - PORT=3033
+      - DATA_DIR=/data
+      - SECRET_KEY=change-this-secret
+      - ADMIN_PASSWORD=admin
+      - POLL_SECONDS=60
+    volumes:
+      - ./data:/data
