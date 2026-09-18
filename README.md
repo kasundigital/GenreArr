@@ -1,60 +1,80 @@
 # 🎬 GenreArr
 
-**Genre-based library routing for Radarr & Sonarr — safely managed through the Arr APIs.**
+**Smart library routing for Radarr & Sonarr.** GenreArr evaluates imported media and asks the Arr API to move it to the correct root folder. It does not blindly move files at filesystem level.
 
-GenreArr watches imported movies and series, evaluates configurable genre rules, and asks Radarr/Sonarr to move media into the correct root folder. It never uses a blind filesystem `mv`, so the Arr database remains authoritative.
+## ✨ v0.3.0 development build
 
-## ✨ v0.2.0 features
+### Routing
+- Multiple Radarr and Sonarr instances
+- Genre rules with ALL / ANY matching
+- Combined genres such as `Animation + Family`
+- Smart conditions: original language, year-before, Arr tag ID
+- Priority ordering, enable/disable/edit rules
+- Separate movie/series fallback roots
+- Title/path/tag exclusions
 
-- 🎥 Radarr + 📺 Sonarr, with multiple instances
-- 🔔 Per-instance webhook endpoint for post-import sorting
-- 🔎 Root-folder discovery directly from Arr
-- 🧠 Priority rule engine with `ALL` / `ANY` and combined genres (`Animation + Family`)
-- 🛟 Dry Run enabled by default
-- 🧪 Bulk preview and live scans with progress + Stop
-- 🧱 Import/download queue protection
-- 🚫 Title/path/tag exclusions
-- 📁 Movie and series fallback roots
-- ✅ Post-move path verification
-- ↩️ Undo for GenreArr move history
-- 🧾 Decision history with **Why?** explanation
-- 🔔 Optional Discord / Telegram notifications
-- 💾 Configuration JSON export
-- 🌗 Dark/light UI, mobile responsive
-- 🔐 Admin-only UI
-- 🐳 Docker / Compose
+### Safety
+- Dry Run enabled by default
+- Library Planner with Current → Proposed paths
+- Selective bulk moves
+- Arr root-folder validation
+- Minimum destination free-space validation
+- Queue/import protection
+- Destination path collision detection
+- Post-move API path verification
+- Configurable automatic retries
+- Move history + Undo
 
-## 🚀 Quick start
+### Automation & operations
+- Per-instance Radarr/Sonarr webhook
+- Last-webhook health status
+- Scheduled reconciliation scan
+- Scan progress + Stop
+- System Health page
+- Discord/Telegram notifications
+- Configuration export + restore
+- Docker/Compose, admin login, responsive dark/light UI
+
+## 🚀 Install
 
 ```bash
 git clone https://github.com/kasundigital/GenreArr.git
 cd GenreArr
+# Edit ADMIN_PASSWORD and SECRET_KEY first
 docker compose up -d --build
 ```
 
-Open `http://YOUR-SERVER:3033`. Default password is `admin`; **change `ADMIN_PASSWORD` and `SECRET_KEY` in `docker-compose.yml` before exposing GenreArr.**
+Open `http://SERVER:3033`.
 
-## 🔗 Webhook setup
+> **Important:** v0.3.0 is a development build. Keep Dry Run enabled first and validate proposed paths against a test Radarr/Sonarr library before enabling live moves.
 
-After adding an instance, GenreArr shows a unique webhook path. In Radarr/Sonarr go to **Settings → Connect → Webhook**, use GenreArr's reachable base URL plus that path, and enable download/import events. GenreArr will process the affected title after the Arr import event.
+## 🔗 Webhook
 
-## 🧠 Example rules
+Add the instance in GenreArr. Copy its unique webhook path and add it in **Radarr/Sonarr → Settings → Connect → Webhook** using the GenreArr base URL. Enable download/import events.
 
-| Priority | Media | Match | Genres | Destination |
+## 🧠 Examples
+
+| Priority | Media | Genre | Extra | Destination |
 |---:|---|---|---|---|
-| 10 | Movie | ALL | Animation + Family | `/movies/Kids` |
-| 20 | Movie | ALL | Documentary | `/movies/Documentary` |
-| 30 | Movie | ALL | Horror | `/movies/Horror` |
-| 10 | Series | ALL | Animation | `/tv/Animation` |
+| 10 | Movie | Animation + Family | — | `/movies/Kids` |
+| 20 | Movie | Animation | language = ja | `/movies/Anime` |
+| 30 | Movie | — | year < 1980 | `/movies/Classics` |
+| 40 | Movie | Documentary | — | `/movies/Documentary` |
 
-Lower priority numbers win. A fallback root can be configured separately for movies and series.
+## 🧪 Recommended test sequence
 
-## ⚠️ Safety
-
-Start with **Dry Run**. Review the Current → Destination paths and decision reasons before applying moves to a production library. GenreArr skips media seen in the Arr queue and verifies the path after a move request. Always maintain normal backups of your Arr configuration/database.
+1. Connect a test Radarr instance.
+2. Open **Health** and verify API/root discovery.
+3. Create rules using exact roots returned by Radarr.
+4. Open **Planner** and inspect decisions.
+5. Run Preview/Dry Run.
+6. Select one small test movie and apply the move.
+7. Confirm both the physical media path and Radarr's displayed path.
+8. Test webhook import sorting.
+9. Repeat for Sonarr before production use.
 
 ## ☕ Support
 
-GenreArr is free and open source. If it saves you time, support development through Buy Me a Coffee: https://buymeacoffee.com/kasundigital
+GenreArr is free and open source. Support development at https://buymeacoffee.com/kasundigital
 
 Designed & Developed by **Kasun Indika** — https://www.kasunindika.com
