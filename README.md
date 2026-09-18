@@ -52,18 +52,35 @@ No Docker/Radarr development knowledge is required. Follow the **[Beginner Setup
 
 **New users: please read the Setup Guide before enabling live moves.**
 
-## 🚀 Quick install (experienced users)
+## 🚀 Easy install — no Git required
+
+For most users, install GenreArr with **one command**:
 
 ```bash
-git clone https://github.com/kasundigital/GenreArr.git
-cd GenreArr
-# Edit ADMIN_PASSWORD and SECRET_KEY first
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
 ```
 
-Open `http://SERVER:3033`.
+That's it. The installer downloads GenreArr, creates a secure random admin password and secret, starts the Docker container, and prints the web address and password.
 
-> **Important:** v0.3.0 is a development build. Keep Dry Run enabled first and validate proposed paths against a test Radarr/Sonarr library before enabling live moves.
+Default web port:
+
+```text
+http://YOUR-SERVER-IP:3033
+```
+
+GenreArr data is stored in `/opt/genrearr/data`.
+
+### Update later
+
+Run the same command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
+```
+
+The existing `.env` and persistent `data` directory are retained.
+
+> Docker and the Docker Compose plugin must already be installed. No `git clone` is required.
 
 ## 🔗 Webhook
 
