@@ -35,7 +35,24 @@
 - Configuration export + restore
 - Docker/Compose, admin login, responsive dark/light UI
 
-## 🚀 Install
+## 👋 New to GenreArr?
+
+No Docker/Radarr development knowledge is required. Follow the **[Beginner Setup Guide](docs/SETUP.md)** for a step-by-step walkthrough covering:
+
+- Installation and first login
+- Finding your Radarr/Sonarr API key
+- Adding instances
+- Understanding Docker/root-folder paths
+- Creating simple and Smart Rules
+- Dry Run and Library Planner
+- Testing your first real move safely
+- Radarr/Sonarr webhook setup
+- Health checks and scheduled reconciliation
+- Backup/restore, updates and troubleshooting
+
+**New users: please read the Setup Guide before enabling live moves.**
+
+## 🚀 Quick install (experienced users)
 
 ```bash
 git clone https://github.com/kasundigital/GenreArr.git
