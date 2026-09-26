@@ -13,9 +13,20 @@ mkdir -p "$INSTALL_DIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-curl -fsSL "https://github.com/kasundigital/GenreArr/archive/refs/heads/main.tar.gz" -o "$TMP/genrearr.tar.gz"
-tar -xzf "$TMP/genrearr.tar.gz" -C "$TMP"
-cp -a "$TMP/GenreArr-main/." "$INSTALL_DIR/"
+REPO="kasundigital/GenreArr"
+# Install the latest published release; GENREARR_VERSION=v0.4.0 pins one, GENREARR_VERSION=main takes the development branch.
+VERSION="${GENREARR_VERSION:-}"
+if [ -z "$VERSION" ]; then
+  VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  VERSION="${VERSION:-main}"
+fi
+if [ "$VERSION" = "main" ]; then URL="https://github.com/$REPO/archive/refs/heads/main.tar.gz"
+else URL="https://github.com/$REPO/archive/refs/tags/$VERSION.tar.gz"; fi
+echo "⬇️  Downloading GenreArr $VERSION"
+curl -fsSL "$URL" -o "$TMP/genrearr.tar.gz"
+mkdir -p "$TMP/src"
+tar -xzf "$TMP/genrearr.tar.gz" -C "$TMP/src" --strip-components=1
+cp -a "$TMP/src/." "$INSTALL_DIR/"
 mkdir -p "$INSTALL_DIR/data"
 
 cd "$INSTALL_DIR"
@@ -29,6 +40,8 @@ if [ ! -f .env ]; then
 GENREARR_PORT=$PORT
 SECRET_KEY=$SECRET
 ADMIN_PASSWORD=$PASS
+PUID=${PUID:-1000}
+PGID=${PGID:-1000}
 EOF
   chmod 600 .env
 else
@@ -44,7 +57,7 @@ fi
 docker compose up -d --build
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
-echo "✅ GenreArr is running"
+echo "✅ GenreArr $VERSION is running"
 echo "🌐 Open: http://${IP:-YOUR-SERVER}:$PORT"
 if [ "$FIRST_INSTALL" = 1 ]; then
   echo "🔐 Admin password: $PASS"

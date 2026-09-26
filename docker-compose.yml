@@ -8,9 +8,16 @@ services:
     environment:
       PORT: 3033
       DATA_DIR: /data
+      # User/group that owns ./data (run `id` on the host to see yours).
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       # Leave empty to auto-generate: a private secret is stored in ./data and a
       # random admin password is printed in `docker logs genrearr` on first start.
       SECRET_KEY: ${SECRET_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Behind a reverse proxy (nginx, Caddy, Traefik): set TRUST_PROXY=1,
+      # and COOKIE_SECURE=1 when it serves GenreArr over HTTPS.
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
     volumes:
       - ./data:/data

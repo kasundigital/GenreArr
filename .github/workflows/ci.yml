@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+      - run: bash -n install.sh && sh -n docker-entrypoint.sh
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t genrearr:ci .
+      - name: Container starts as non-root and is healthy
+        run: |
+          docker run -d --name g -e PUID=1234 -e PGID=1234 -p 3033:3033 genrearr:ci
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:3033/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:3033/health
+          test "$(docker exec g sh -c 'stat -c %u /data/genrearr.db')" = 1234
+          test "$(docker exec g awk '/^Uid:/{print $2}' /proc/1/status)" = 1234
+          test "$(docker inspect -f '{{.State.Health.Status}}' g)" != unhealthy

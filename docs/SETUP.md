@@ -201,6 +201,10 @@ Tag ID 4                → /movies/4K
 
 Leave conditions blank when you do not need them.
 
+**Language** accepts a two-letter code (`ja`, `ko`, `si`) or the name Radarr/Sonarr shows (`Japanese`). Separate several with commas: `ja, ko`.
+
+GenreArr checks the **Target** when you save a rule. If Radarr/Sonarr does not list it as a root folder, the rule is rejected and the known roots are shown, so add the folder in **Radarr/Sonarr → Settings → Media Management → Root Folders** first.
+
 ## 7. Use Library Planner before moving anything
 
 Open **Planner**.
@@ -257,6 +261,10 @@ After Dry Run looks correct:
 5. Check the movie path in Radarr.
 6. Check that the actual file/folder is in the expected location.
 7. Play the movie to confirm it is still accessible.
+
+The history entry says whether Radarr/Sonarr **confirmed the files moved**. If Radarr reports the file move failed (for example a full disk or a permissions problem), GenreArr records an error and does not retry. Check **Radarr → System → Tasks / Logs**.
+
+**Undo** is available on the most recent move of each title. It moves the title back and records an `undo` entry.
 
 Do not bulk-move your whole library until this works correctly.
 
@@ -322,6 +330,10 @@ Open **Settings**, enable scheduled reconciliation, and choose an interval.
 
 Keep this disabled until your rules and live moves have been tested.
 
+**History retention** (Settings) removes preview, skip and error entries older than the chosen number of days (default 30; `0` keeps everything). Moves and undos are always kept. Repeated scans with the same result update one entry instead of adding new ones.
+
+Jobs are stored in the database. If GenreArr restarts during a job, the job shows as `interrupted`; run the scan again to continue.
+
 ## 14. Backup your GenreArr settings
 
 Open **Settings → Backup / Restore**.
@@ -369,6 +381,14 @@ Open Planner and read the decision/safety information. Common reasons include:
 Radarr/Sonarr must be able to reach GenreArr. `localhost:3033` usually means the Radarr/Sonarr machine or container itself, not GenreArr.
 
 Use a reachable GenreArr IP/hostname/container name instead.
+
+### Permission denied when saving data
+
+GenreArr runs as user/group `1000` by default. If your data folder belongs to someone else, set `PUID` and `PGID` in `/opt/genrearr/.env` to the output of `id -u` and `id -g`, then run `cd /opt/genrearr && docker compose up -d`.
+
+### HTTPS / reverse proxy
+
+See the README's **Reverse proxy / HTTPS** section (`TRUST_PROXY=1`, `COOKIE_SECURE=1`).
 
 ### View live GenreArr logs
 
