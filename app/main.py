@@ -4,11 +4,11 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 
-VERSION='0.4.0'
+VERSION='0.5.0'
 DATA=os.getenv('DATA_DIR','/data'); DB=os.path.join(DATA,'genrearr.db'); os.makedirs(DATA,exist_ok=True)
 WEAK_SECRETS={'','genrearr-change-me','change-this-secret','replace-with-a-long-random-secret'}
 WEAK_PASSWORDS={'','admin','password','changeme','replace-with-a-strong-password'}
-USER_SETTINGS=['dry_run','auto_sort','poll_seconds','fallback_movie','fallback_series','discord_webhook','telegram_bot','telegram_chat','min_free_gb','retry_attempts','history_days']
+USER_SETTINGS=['dry_run','auto_sort','poll_seconds','fallback_movie','fallback_series','discord_webhook','telegram_bot','telegram_chat','min_free_gb','retry_attempts','history_days','path_mappings']
 MEDIA_TYPES={'movie','series'}; EXCL_MEDIA={'all','movie','series'}; EXCL_MATCH={'title','path','tag'}; MATCH_MODES={'all','any'}
 WEBHOOK_DELAY=int(os.getenv('WEBHOOK_DELAY','20') or 20)
 MOVE_VERIFY_SECONDS=int(os.getenv('MOVE_VERIFY_SECONDS','60') or 60)
@@ -72,11 +72,11 @@ def init():
     CREATE TABLE IF NOT EXISTS exclusions(id INTEGER PRIMARY KEY,media_type TEXT DEFAULT 'all',match_type TEXT DEFAULT 'title',pattern TEXT,enabled INTEGER DEFAULT 1);
     CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,started DATETIME DEFAULT CURRENT_TIMESTAMP,status TEXT,done INTEGER DEFAULT 0,total INTEGER DEFAULT 0,counts TEXT DEFAULT '{}',dry INTEGER,stop INTEGER DEFAULT 0,error TEXT,source TEXT);
     ''')
-    for t,n,d in [('instances','webhook_secret','TEXT'),('instances','last_webhook','TEXT'),('rules','match_mode',"TEXT DEFAULT 'all'"),('rules','language','TEXT'),('rules','year_before','INTEGER'),('rules','tag','TEXT'),('history','media_type','TEXT'),('history','media_id','INTEGER'),('history','rule_id','INTEGER'),('history','instance_id','INTEGER')]: col(c,t,n,d)
+    for t,n,d in [('instances','webhook_secret','TEXT'),('instances','last_webhook','TEXT'),('rules','match_mode',"TEXT DEFAULT 'all'"),('rules','language','TEXT'),('rules','year_before','INTEGER'),('rules','tag','TEXT'),('history','media_type','TEXT'),('history','media_id','INTEGER'),('history','rule_id','INTEGER'),('history','instance_id','INTEGER'),('rules','instance_id','INTEGER')]: col(c,t,n,d)
     c.execute('CREATE INDEX IF NOT EXISTS history_media ON history(instance_id,media_id,id)')
     # Jobs that were running when the container stopped can never finish; mark them so the dashboard is honest.
     c.execute("UPDATE jobs SET status='interrupted' WHERE status IN ('queued','running')")
-    defaults={'dry_run':'1','auto_sort':'0','poll_seconds':'3600','fallback_movie':'','fallback_series':'','discord_webhook':'','telegram_bot':'','telegram_chat':'','min_free_gb':'5','retry_attempts':'2','history_days':'30'}
+    defaults={'dry_run':'1','auto_sort':'0','poll_seconds':'3600','fallback_movie':'','fallback_series':'','discord_webhook':'','telegram_bot':'','telegram_chat':'','min_free_gb':'5','retry_attempts':'2','history_days':'30','path_mappings':''}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
     c.commit(); c.close()
 init()
@@ -118,6 +118,22 @@ def api(inst,path,method='GET',payload=None):
     r=requests.request(method,inst['url'].rstrip('/')+'/api/v3/'+path.lstrip('/'),headers={'X-Api-Key':inst['api_key']},json=payload,timeout=45); r.raise_for_status(); return r.json() if r.content else {}
 def roots(inst): return api(inst,'rootfolder')
 def media_endpoint(media): return 'movie' if media=='movie' else 'series'
+def parse_mappings(text):
+    '''"arr_path=local_path" lines → [(arr_prefix, local_prefix)], longest Arr prefix first. Raises ValueError on bad lines.'''
+    out=[]
+    for n,line in enumerate((text or '').splitlines(),1):
+        line=line.strip()
+        if not line or line.startswith('#'): continue
+        arr,sep,local=line.partition('=')
+        arr=norm(arr.strip()); local=norm(local.strip())
+        if not sep or not arr.startswith('/') or not local.startswith('/'): raise ValueError(f'line {n}: use /arr/path=/local/path')
+        out.append((arr,local))
+    return sorted(out,key=lambda m:-len(m[0]))
+def local_path(path,mappings):
+    '''Translate a Radarr/Sonarr path to where GenreArr can see it on disk, or None when no mapping covers it.'''
+    p=norm(path)
+    for arr,local in mappings:
+        if p==arr or p.startswith(arr+'/'): return local+p[len(arr):]
 def size_of(media,x): return (x.get('sizeOnDisk') if media=='movie' else (x.get('statistics') or {}).get('sizeOnDisk')) or 0
 def media_of(inst): return 'movie' if inst['type']=='radarr' else 'series'
 def imported(media,x): return x.get('hasFile',False) if media=='movie' else (x.get('statistics') or {}).get('episodeFileCount',0)>0
@@ -191,8 +207,9 @@ def rule_matches(r,x):
     if yb and (not year or year>=yb): return False
     if r['tag'] and str(r['tag']).strip() not in {str(t) for t in x.get('tags',[]) or []}: return False
     return True
-def choose(media,x):
-    c=db(); rows=c.execute('SELECT * FROM rules WHERE enabled=1 AND media_type=? ORDER BY priority,id',(media,)).fetchall(); c.close()
+def choose(media,x,inst=None):
+    # Rules without an instance apply to every instance of that type; scoped rules only to their instance.
+    c=db(); rows=c.execute('SELECT * FROM rules WHERE enabled=1 AND media_type=? AND (instance_id IS NULL OR instance_id=?) ORDER BY priority,id',(media,inst['id'] if inst else None)).fetchall(); c.close()
     for r in rows:
         if rule_matches(r,x): return r['target_root'],r
     f=setting('fallback_'+media,''); return (f,None) if f else (None,None)
@@ -205,6 +222,13 @@ def safety(ctx,x,target,new):
     checks.append({'label':'Not active in queue','ok':not ctx.busy(x)})
     paths=ctx.paths(); owner=paths.get(norm(new)) if paths is not None else None
     checks.append({'label':'No destination collision','ok':paths is not None and owner in (None,x.get('id'))})
+    try: mappings=parse_mappings(setting('path_mappings'))
+    except ValueError: mappings=[]
+    local_root,local_new=local_path(target,mappings),local_path(new,mappings)
+    if local_root:
+        # With a path mapping GenreArr can also see folders Radarr/Sonarr do not know about.
+        if not os.path.isdir(local_root): checks.append({'label':f'Destination root visible on disk ({local_root})','ok':False})
+        else: checks.append({'label':'Destination folder not already on disk','ok':not os.path.lexists(local_new)})
     return checks
 def decision(inst,media,x,ctx=None,check_safety=True):
     ctx=ctx or Ctx(inst,media)
@@ -212,7 +236,7 @@ def decision(inst,media,x,ctx=None,check_safety=True):
     base={'old':old,'new':old,'genres':genres,'rule':None,'safety':[]}
     if ex: return {**base,'action':'skip','reason':f"Excluded by {ex['match_type']}: {ex['pattern']}"}
     if not imported(media,x): return {**base,'action':'skip','reason':'No imported media files yet'}
-    root,rule=choose(media,x)
+    root,rule=choose(media,x,inst)
     if not root: return {**base,'action':'skip','reason':'No matching smart rule or fallback'}
     folder=posixpath.basename(norm(old)) or x.get('title','Media'); new=norm(root)+'/'+folder
     # Compare the title's parent folder, not a path prefix, so nested roots (/movies vs /movies/Kids) are handled.
@@ -239,12 +263,17 @@ def prune_history():
     c=db(); n=c.execute("DELETE FROM history WHERE status NOT IN ('moved','undone','undo') AND ts<datetime('now',?)",(f'-{days} days',)).rowcount
     c.execute("DELETE FROM jobs WHERE status NOT IN ('queued','running') AND started<datetime('now',?)",(f'-{days} days',)); c.commit(); c.close(); return n
 def notify(text):
-    try:
-        if setting('discord_webhook'): requests.post(setting('discord_webhook'),json={'content':text},timeout=10)
-    except Exception: pass
-    try:
-        if setting('telegram_bot') and setting('telegram_chat'): requests.post(f"https://api.telegram.org/bot{setting('telegram_bot')}/sendMessage",json={'chat_id':setting('telegram_chat'),'text':text},timeout=10)
-    except Exception: pass
+    '''Send to every configured channel. Returns {channel: None on success or an error message}.'''
+    results={}
+    if setting('discord_webhook'):
+        try: requests.post(setting('discord_webhook'),json={'content':text},timeout=10).raise_for_status(); results['Discord']=None
+        except Exception as e: results['Discord']=str(e)
+    if setting('telegram_bot') and setting('telegram_chat'):
+        try: requests.post(f"https://api.telegram.org/bot{setting('telegram_bot')}/sendMessage",json={'chat_id':setting('telegram_chat'),'text':text},timeout=10).raise_for_status(); results['Telegram']=None
+        except Exception as e: results['Telegram']=str(e).replace(setting('telegram_bot'),'***')
+    for ch,err in results.items():
+        if err: log(f'{ch} notification failed: {err}')
+    return results
 class MoveFailed(RuntimeError):
     '''The Arr accepted the new path but reported that moving the files failed; retrying the PUT would not help.'''
 def command_ids(inst):
@@ -420,7 +449,30 @@ def instances():
 @app.post('/instances/<int:i>/delete')
 @auth
 def del_instance(i):
-    c=db(); c.execute('DELETE FROM instances WHERE id=?',(i,)); c.commit(); c.close(); return redirect('/instances')
+    c=db(); c.execute('DELETE FROM instances WHERE id=?',(i,))
+    # Rules limited to this instance must not silently start applying to others.
+    n=c.execute('UPDATE rules SET enabled=0 WHERE instance_id=? AND enabled=1',(i,)).rowcount; c.commit(); c.close()
+    flash('Instance deleted'+(f' — {n} rule(s) limited to it were disabled' if n else '')); return redirect('/instances')
+@app.route('/instances/<int:i>/edit',methods=['GET','POST'])
+@auth
+def edit_instance(i):
+    inst=get_instance(i)
+    if request.method=='POST':
+        name=request.form.get('name','').strip(); url=request.form.get('url','').strip().rstrip('/'); key=request.form.get('api_key','').strip() or inst['api_key']
+        if not name or not url.startswith(('http://','https://')): flash('Please enter a name and an http(s) URL')
+        else:
+            c=db(); c.execute('UPDATE instances SET name=?,url=?,api_key=? WHERE id=?',(name,url,key,i)); c.commit(); c.close()
+            flash('Instance updated — the webhook URL is unchanged'); return redirect('/instances')
+    return render_template('instance_edit.html',r=inst,version=VERSION)
+@app.post('/instances/<int:i>/toggle')
+@auth
+def toggle_instance(i):
+    get_instance(i); c=db(); c.execute('UPDATE instances SET enabled=CASE enabled WHEN 1 THEN 0 ELSE 1 END WHERE id=?',(i,)); c.commit(); c.close(); return redirect('/instances')
+@app.post('/instances/<int:i>/webhook')
+@auth
+def regenerate_webhook(i):
+    get_instance(i); c=db(); c.execute('UPDATE instances SET webhook_secret=? WHERE id=?',(uuid.uuid4().hex,i)); c.commit(); c.close()
+    flash('New webhook URL generated — update it in Radarr/Sonarr → Settings → Connect, the old one no longer works'); return redirect('/instances')
 def get_instance(i):
     c=db(); inst=c.execute('SELECT * FROM instances WHERE id=?',(i,)).fetchone(); c.close()
     if not inst: abort(404)
@@ -446,17 +498,22 @@ def rule_form(f):
     if prio is None: raise ValueError('Priority must be a whole number')
     if yb and yb_i is None: raise ValueError('Year before must be a whole number')
     mode=f.get('match_mode','all'); mode=mode if mode in MATCH_MODES else 'all'
-    return (mt,f.get('genre','').strip(),target,prio,mode,f.get('language','').strip() or None,yb_i,f.get('tag','').strip() or None)
-def arr_roots(media):
-    '''All root folders of enabled instances for this media type, or None when none could be reached.'''
-    c=db(); ins=c.execute('SELECT * FROM instances WHERE enabled=1 AND type=?',('radarr' if media=='movie' else 'sonarr',)).fetchall(); c.close(); found=set(); ok=False
+    iid=to_int(f.get('instance_id'))
+    if iid is not None:
+        c=db(); inst=c.execute('SELECT type FROM instances WHERE id=?',(iid,)).fetchone(); c.close()
+        if not inst: raise ValueError('The selected instance no longer exists')
+        if media_of(inst)!=mt: raise ValueError(f"A {mt} rule cannot be limited to a {inst['type'].title()} instance")
+    return (mt,f.get('genre','').strip(),target,prio,mode,f.get('language','').strip() or None,yb_i,f.get('tag','').strip() or None,iid)
+def arr_roots(media,instance_id=None):
+    '''Root folders of enabled instances for this media type (or one instance), or None when none could be reached.'''
+    c=db(); ins=c.execute('SELECT * FROM instances WHERE enabled=1 AND type=? AND (? IS NULL OR id=?)',('radarr' if media=='movie' else 'sonarr',instance_id,instance_id)).fetchall(); c.close(); found=set(); ok=False
     for i in ins:
         try: found|={norm(r.get('path')) for r in roots(i)}; ok=True
         except Exception: pass
     return found if ok else None
-def check_target(media,target):
+def check_target(media,target,instance_id=None):
     '''Returns (error, warning). An unknown root is an error only when Radarr/Sonarr could actually be asked.'''
-    known=arr_roots(media); app_name='Radarr' if media=='movie' else 'Sonarr'
+    known=arr_roots(media,instance_id); app_name='Radarr' if media=='movie' else 'Sonarr'
     if known is None: return None,f'Saved, but the target could not be checked because no {app_name} instance is reachable — verify it on the Health page.'
     if norm(target) not in known: return f"'{target}' is not a root folder in {app_name}. Known roots: {', '.join(sorted(known)) or 'none'}. Add it in {app_name} → Settings → Media Management first.",None
     return None,None
@@ -466,11 +523,12 @@ def rules_page():
     c=db()
     if request.method=='POST':
         try:
-            vals=rule_form(request.form); err,warn=check_target(vals[0],vals[2])
+            vals=rule_form(request.form); err,warn=check_target(vals[0],vals[2],vals[8])
             if err: raise ValueError(err)
-            c.execute('INSERT INTO rules(media_type,genre,target_root,priority,match_mode,language,year_before,tag) VALUES(?,?,?,?,?,?,?,?)',vals); c.commit(); flash(warn or 'Smart rule added')
+            c.execute('INSERT INTO rules(media_type,genre,target_root,priority,match_mode,language,year_before,tag,instance_id) VALUES(?,?,?,?,?,?,?,?,?)',vals); c.commit(); flash(warn or 'Smart rule added')
         except ValueError as e: flash(f'Rule not saved: {e}')
-    rows=c.execute('SELECT * FROM rules ORDER BY media_type,priority,id').fetchall(); ins=c.execute('SELECT * FROM instances WHERE enabled=1 ORDER BY name').fetchall(); c.close(); return render_template('rules.html',rows=rows,instances=ins,version=VERSION)
+    rows=c.execute('SELECT * FROM rules ORDER BY media_type,priority,id').fetchall(); ins=c.execute('SELECT * FROM instances ORDER BY name').fetchall(); c.close()
+    return render_template('rules.html',rows=rows,instances=ins,names={i['id']:i['name'] for i in ins},version=VERSION)
 @app.route('/rules/<int:i>/edit',methods=['GET','POST'])
 @auth
 def edit_rule(i):
@@ -478,13 +536,13 @@ def edit_rule(i):
     if not r: c.close(); abort(404)
     if request.method=='POST':
         try:
-            vals=rule_form(request.form); err,warn=check_target(vals[0],vals[2])
+            vals=rule_form(request.form); err,warn=check_target(vals[0],vals[2],vals[8])
             if err: raise ValueError(err)
-            c.execute('UPDATE rules SET media_type=?,genre=?,target_root=?,priority=?,match_mode=?,language=?,year_before=?,tag=?,enabled=? WHERE id=?',(*vals,1 if request.form.get('enabled') else 0,i)); c.commit(); c.close()
+            c.execute('UPDATE rules SET media_type=?,genre=?,target_root=?,priority=?,match_mode=?,language=?,year_before=?,tag=?,instance_id=?,enabled=? WHERE id=?',(*vals,1 if request.form.get('enabled') else 0,i)); c.commit(); c.close()
             if warn: flash(warn)
             return redirect('/rules')
         except ValueError as e: flash(f'Rule not saved: {e}')
-    c.close(); return render_template('rule_edit.html',r=r,version=VERSION)
+    ins=c.execute('SELECT * FROM instances ORDER BY name').fetchall(); c.close(); return render_template('rule_edit.html',r=r,instances=ins,version=VERSION)
 @app.post('/rules/<int:i>/toggle')
 @auth
 def toggle_rule(i):
@@ -518,12 +576,23 @@ def settings_page():
         for k in USER_SETTINGS:
             v=f.get(k,'0' if k in ['dry_run','auto_sort'] else '').strip()
             if k in numeric and not numeric[k][0](v): errors.append(numeric[k][1]); continue
+            if k=='path_mappings':
+                v=f.get(k,'').strip()
+                try: parse_mappings(v)
+                except ValueError as e: errors.append(f'Path mappings not changed: {e}'); continue
             if k in ('fallback_movie','fallback_series') and v and v!=setting(k):
                 err,_=check_target('movie' if k=='fallback_movie' else 'series',v)
                 if err: errors.append('Fallback not changed: '+err); continue
             set_setting(k,v)
         flash('Settings saved' if not errors else 'Settings saved, except: '+'; '.join(errors))
     return render_template('settings.html',s={k:setting(k) for k in USER_SETTINGS},version=VERSION)
+@app.post('/settings/notify-test')
+@auth
+def notify_test():
+    results=notify(f'GenreArr v{VERSION}: test notification ✓')
+    if not results: flash('No notification channel is configured — fill in Discord or Telegram and save settings first')
+    for ch,err in results.items(): flash(f'{ch}: test sent' if not err else f'{ch}: failed — {err}')
+    return redirect('/settings')
 @app.post('/settings/password')
 @auth
 def change_password():
@@ -617,7 +686,7 @@ def parse_import(data):
         mt=r.get('media_type'); target=str(r.get('target_root') or '').strip(); prio=to_int(r.get('priority',100))
         if mt not in MEDIA_TYPES or not target or prio is None: raise ValueError(f'invalid rule: {r}')
         mode=r.get('match_mode') if r.get('match_mode') in MATCH_MODES else 'all'; tag=r.get('tag')
-        rules.append((mt,r.get('genre') or '',target,prio,1 if r.get('enabled',1) else 0,mode,r.get('language') or None,to_int(r.get('year_before')),str(tag).strip() if tag not in (None,'') else None))
+        rules.append((mt,r.get('genre') or '',target,prio,1 if r.get('enabled',1) else 0,mode,r.get('language') or None,to_int(r.get('year_before')),str(tag).strip() if tag not in (None,'') else None,to_int(r.get('instance_id'))))
     for r in data.get('exclusions',[]) or []:
         mt=r.get('media_type','all'); mm=r.get('match_type','title'); pat=str(r.get('pattern') or '').strip()
         if mt not in EXCL_MEDIA or mm not in EXCL_MATCH: raise ValueError(f'invalid exclusion: {r}')
@@ -632,15 +701,22 @@ def import_config():
         f=request.files.get('file')
         if not f: raise ValueError('no file uploaded')
         rules,excl,sets=parse_import(json.load(f))
-        c=db()
+        c=db(); known={r['id']:media_of(r) for r in c.execute('SELECT id,type FROM instances')}
+        # Instance ids are local to one install: a rule scoped to an instance that does not exist here is imported disabled.
+        fixed=[]; orphans=0
+        for r in rules:
+            iid=r[9]
+            if iid is not None and known.get(iid)!=r[0]: r=(*r[:4],0,*r[5:]); orphans+=1
+            fixed.append(r)
+        rules=fixed
         try:
             with c:
                 c.execute('DELETE FROM rules'); c.execute('DELETE FROM exclusions')
-                c.executemany('INSERT INTO rules(media_type,genre,target_root,priority,enabled,match_mode,language,year_before,tag) VALUES(?,?,?,?,?,?,?,?,?)',rules)
+                c.executemany('INSERT INTO rules(media_type,genre,target_root,priority,enabled,match_mode,language,year_before,tag,instance_id) VALUES(?,?,?,?,?,?,?,?,?,?)',rules)
                 c.executemany('INSERT INTO exclusions(media_type,match_type,pattern,enabled) VALUES(?,?,?,?)',excl)
                 c.executemany('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v',sets)
         finally: c.close()
-        flash(f'Configuration restored: {len(rules)} rule(s), {len(excl)} exclusion(s), {len(sets)} setting(s)')
+        flash(f'Configuration restored: {len(rules)} rule(s), {len(excl)} exclusion(s), {len(sets)} setting(s)'+(f' — {orphans} rule(s) were limited to an instance that does not exist here and were disabled' if orphans else ''))
     except Exception as e: flash(f'Restore failed: {e}')
     return redirect('/settings')
 @app.get('/health')
