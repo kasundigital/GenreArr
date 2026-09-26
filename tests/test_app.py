@@ -1,4 +1,4 @@
-import io, json, time
+import io, json, re, time
 from conftest import post, login
 
 def wait(pred, timeout=10):
@@ -143,3 +143,139 @@ def test_import_validates_before_replacing(main, client):
     exp = client.get('/api/export').get_json()
     post(client, '/api/import', {'file': (io.BytesIO(json.dumps(exp).encode()), 'x.json')}, content_type='multipart/form-data')
     assert main.db().execute('SELECT count(*) FROM rules').fetchone()[0] == 1 and main.setting('admin_password_hash')
+
+# --- Sonarr -----------------------------------------------------------------
+def add_sonarr(client, srv):
+    srv.reset()
+    post(client, '/instances', {'name': 'S', 'type': 'sonarr', 'url': srv.url, 'api_key': 'k'})
+
+def sonarr_id(main):
+    return main.db().execute("SELECT id FROM instances WHERE type='sonarr'").fetchone()[0]
+
+def test_sonarr_decisions_and_move(main, client, sonarr_server):
+    add_sonarr(client, sonarr_server); sid = sonarr_id(main)
+    add_rule(client, media_type='series', genre='Animation + Children', target_root='/tv/Kids', priority='10')
+    add_rule(client, media_type='series', genre='Animation', language='ja', target_root='/tv/Anime', priority='20')
+    d = {x['id']: main.decision(i, m, x, c) for i, m, x, c in main.load_library() if m == 'series'}
+    assert d[1]['action'] == 'move' and d[1]['new'] == '/tv/Kids/Cartoon Show'
+    assert d[2]['action'] == 'move' and d[2]['new'] == '/tv/Anime/Shonen'
+    assert d[3]['action'] == 'skip' and 'No imported media' in d[3]['reason']
+    assert d[4]['action'] == 'skip' and 'queue' in d[4]['reason']
+    job = run(main, dry=False, selected={f'{sid}:series:1'})
+    assert job['counts']['moved'] == 1
+    assert sonarr_server.moved_with_flag[1] is True and sonarr_server.items[1]['path'] == '/tv/Kids/Cartoon Show'
+    assert 'confirmed by Arr' in main.db().execute("SELECT message FROM history WHERE status='moved'").fetchone()[0]
+
+def test_sonarr_webhook_burst_processed_once(main, client, sonarr_server):
+    add_sonarr(client, sonarr_server); sid = sonarr_id(main)
+    add_rule(client, media_type='series', genre='Animation + Children', target_root='/tv/Kids')
+    main.set_setting('dry_run', '0')
+    secret = main.db().execute('SELECT webhook_secret FROM instances WHERE id=?', (sid,)).fetchone()[0]
+    codes = [client.post(f'/webhook/{sid}/{secret}', json={'eventType': 'Download', 'series': {'id': 1}}).status_code for _ in range(3)]
+    assert codes[0] == 202
+    assert wait(lambda: sonarr_server.items[1]['path'] == '/tv/Kids/Cartoon Show')
+    assert len(sonarr_server.commands) == 1
+
+# --- per-instance rules -------------------------------------------------------
+def test_rule_limited_to_instance(main, client):
+    rid = main.db().execute("SELECT id FROM instances WHERE type='radarr'").fetchone()[0]
+    post(client, '/instances', {'name': 'R2', 'type': 'radarr', 'url': client.arr.url, 'api_key': 'k'})
+    r2 = main.db().execute("SELECT id FROM instances WHERE name='R2'").fetchone()[0]
+    add_rule(client, genre='Horror', target_root='/movies/Horror', instance_id=str(r2))
+    d = {(i['id'], x['id']): main.decision(i, m, x, c) for i, m, x, c in main.load_library()}
+    assert d[(r2, 2)]['action'] == 'move' and d[(rid, 2)]['action'] == 'skip'
+    post(client, f'/instances/{r2}/delete')
+    assert main.db().execute('SELECT enabled FROM rules').fetchone()[0] == 0
+
+def test_rule_instance_type_must_match(main, client, sonarr_server):
+    add_sonarr(client, sonarr_server)
+    html = add_rule(client, genre='Horror', target_root='/movies/Horror', instance_id=str(sonarr_id(main)))
+    assert 'cannot be limited to a Sonarr instance' in html
+
+# --- instance management ------------------------------------------------------
+def test_edit_toggle_and_regenerate_instance(main, client):
+    iid, secret, key = main.db().execute('SELECT id,webhook_secret,api_key FROM instances').fetchone()
+    post(client, f'/instances/{iid}/edit', {'name': 'Radarr HD', 'url': client.arr.url + '/', 'api_key': ''})
+    row = main.db().execute('SELECT name,url,api_key,webhook_secret FROM instances WHERE id=?', (iid,)).fetchone()
+    assert (row[0], row[1], row[2], row[3]) == ('Radarr HD', client.arr.url, key, secret)
+    post(client, f'/instances/{iid}/toggle')
+    assert main.db().execute('SELECT enabled FROM instances WHERE id=?', (iid,)).fetchone()[0] == 0
+    assert main.load_library() == []
+    post(client, f'/instances/{iid}/toggle')
+    post(client, f'/instances/{iid}/webhook')
+    new = main.db().execute('SELECT webhook_secret FROM instances WHERE id=?', (iid,)).fetchone()[0]
+    assert new != secret
+    assert client.post(f'/webhook/{iid}/{secret}', json={}).status_code == 403
+
+# --- path mappings -------------------------------------------------------------
+def test_path_mapping_detects_folder_on_disk(main, client, tmp_path):
+    (tmp_path / 'Horror' / 'Scary').mkdir(parents=True)
+    add_rule(client, genre='Horror', target_root='/movies/Horror')
+    r = post(client, '/settings', {'dry_run': '1', 'poll_seconds': '3600', 'min_free_gb': '5', 'retry_attempts': '2', 'history_days': '30', 'path_mappings': 'bad line'}, follow_redirects=True)
+    assert 'Path mappings not changed' in r.get_data(as_text=True)
+    main.set_setting('path_mappings', f'/movies={tmp_path}')
+    d = decisions(main)[2]
+    assert d['action'] == 'skip' and 'not already on disk' in d['reason']
+    (tmp_path / 'Horror' / 'Scary').rmdir()
+    assert decisions(main)[2]['action'] == 'move'
+    main.set_setting('path_mappings', '/movies=/does/not/exist')
+    assert 'visible on disk' in decisions(main)[2]['reason']
+
+def test_local_path_longest_prefix_and_instance_scope(main):
+    parsed = main.parse_mappings('/movies=/a\n/movies/Kids=/b\n# comment\nRadarr 4K: /movies=/c\n')
+    hd, uhd = {'name': 'Radarr HD'}, {'name': 'radarr 4k'}
+    m = main.mappings_for(hd, parsed)
+    assert main.local_path('/movies/Kids/X', m) == '/b/X'
+    assert main.local_path('/movies/Y', m) == '/a/Y'
+    assert main.local_path('/moviesX/Y', m) is None and main.local_path('/tv/Y', m) is None
+    assert main.local_path('/movies/Y', main.mappings_for(uhd, parsed)) == '/c/Y'   # instance line wins
+
+def test_path_mapping_validation(main, client):
+    base = {'dry_run': '1', 'poll_seconds': '3600', 'min_free_gb': '5', 'retry_attempts': '2', 'history_days': '30'}
+    r = post(client, '/settings', {**base, 'path_mappings': 'Nope: /movies=/x'}, follow_redirects=True)
+    assert 'no instance named nope' in r.get_data(as_text=True)
+    post(client, '/instances', {'name': 'R2', 'type': 'radarr', 'url': client.arr.url, 'api_key': 'k'})
+    r = post(client, '/settings', {**base, 'path_mappings': '/movies=/x'}, follow_redirects=True)
+    assert 'several Radarr instances' in r.get_data(as_text=True) and main.setting('path_mappings') == '/movies=/x'
+
+# --- notifications -------------------------------------------------------------
+def test_notification_test_button(main, client, monkeypatch):
+    sent = []
+    class Resp:
+        def raise_for_status(self): pass
+    monkeypatch.setattr(main.requests, 'post', lambda url, **kw: sent.append(url) or Resp())
+    assert 'No notification channel is configured' in post(client, '/settings/notify-test', follow_redirects=True).get_data(as_text=True)
+    main.set_setting('discord_webhook', 'https://discord.example/hook')
+    assert 'Discord: test sent' in post(client, '/settings/notify-test', follow_redirects=True).get_data(as_text=True)
+    assert sent == ['https://discord.example/hook']
+    main.set_setting('discord_webhook', '')
+
+def test_export_import_keeps_rule_scope(main, client):
+    iid = main.db().execute('SELECT id FROM instances').fetchone()[0]
+    add_rule(client, genre='Horror', target_root='/movies/Horror', instance_id=str(iid))
+    exp = client.get('/api/export').get_json()
+    # A backup from another install: its instance 7 is this install's Radarr (same URL), its instance 1 is unknown here.
+    exp['instances'] = [{'id': 7, 'name': 'Other name', 'type': 'radarr', 'url': client.arr.url},
+                        {'id': iid, 'name': 'Elsewhere', 'type': 'radarr', 'url': 'http://elsewhere:7878'}]
+    exp['rules'] = [dict(exp['rules'][0], instance_id=7), dict(exp['rules'][0], instance_id=iid)]
+    r = post(client, '/api/import', {'file': (io.BytesIO(json.dumps(exp).encode()), 'x.json')}, content_type='multipart/form-data', follow_redirects=True)
+    assert '1 rule(s) were limited to an instance that could not be matched here' in r.get_data(as_text=True)
+    rows = main.db().execute('SELECT instance_id,enabled FROM rules ORDER BY id').fetchall()
+    assert [tuple(x) for x in rows] == [(iid, 1), (None, 0)]   # id collision does NOT attach to the wrong instance
+
+def test_discord_webhook_redacted_in_errors(main, client, monkeypatch):
+    hook = 'https://discord.example/api/webhooks/123/SECRET'
+    def boom(url, **kw): raise main.requests.HTTPError(f'404 Client Error: Not Found for url: {url}')
+    monkeypatch.setattr(main.requests, 'post', boom)
+    main.set_setting('discord_webhook', hook)
+    html = post(client, '/settings/notify-test', follow_redirects=True).get_data(as_text=True)
+    main.set_setting('discord_webhook', '')
+    flashes = re.findall(r'<div class="flash">(.*?)</div>', html)
+    assert any('Discord: failed' in f for f in flashes) and not any('SECRET' in f for f in flashes)
+
+def test_every_page_renders(main, client):
+    add_rule(client, genre='Horror', target_root='/movies/Horror')
+    iid = main.db().execute('SELECT id FROM instances').fetchone()[0]
+    rid = main.db().execute('SELECT id FROM rules').fetchone()[0]
+    for url in ['/', '/planner', '/instances', f'/instances/{iid}/edit', '/rules', f'/rules/{rid}/edit', '/exclusions', '/health-ui', '/settings', '/health']:
+        assert client.get(url).status_code == 200, url

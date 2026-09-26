@@ -14,7 +14,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 REPO="kasundigital/GenreArr"
-# Install the latest published release; GENREARR_VERSION=v0.4.0 pins one, GENREARR_VERSION=main takes the development branch.
+# Install the latest published release; GENREARR_VERSION=v0.5.0 pins one, GENREARR_VERSION=main takes the development branch.
 VERSION="${GENREARR_VERSION:-}"
 if [ -z "$VERSION" ]; then
   VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
@@ -26,7 +26,17 @@ echo "⬇️  Downloading GenreArr $VERSION"
 curl -fsSL "$URL" -o "$TMP/genrearr.tar.gz"
 mkdir -p "$TMP/src"
 tar -xzf "$TMP/genrearr.tar.gz" -C "$TMP/src" --strip-components=1
+# Remove files that an older version installed but this version no longer ships (never .env or data/).
+MANIFEST="$INSTALL_DIR/.genrearr-files"
+(cd "$TMP/src" && find . -type f ! -path './data/*' | sed 's|^\./||' | sort) > "$TMP/manifest"
+if [ -f "$MANIFEST" ]; then
+  comm -23 <(sort "$MANIFEST") "$TMP/manifest" | while IFS= read -r f; do
+    case "$f" in ""|.env|data/*|*..*) continue ;; esac
+    rm -f -- "$INSTALL_DIR/$f"
+  done
+fi
 cp -a "$TMP/src/." "$INSTALL_DIR/"
+cp "$TMP/manifest" "$MANIFEST"
 mkdir -p "$INSTALL_DIR/data"
 
 cd "$INSTALL_DIR"

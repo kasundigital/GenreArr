@@ -2,10 +2,11 @@
 
 **Smart library routing for Radarr & Sonarr.** GenreArr evaluates imported media and asks the Arr API to move it to the correct root folder. It does not blindly move files at filesystem level.
 
-## ✨ v0.4.0
+## ✨ v0.5.0
 
 ### Routing
-- Multiple Radarr and Sonarr instances
+- Multiple Radarr and Sonarr instances (edit, enable/disable, regenerate webhook URL)
+- Rules for all instances of a type, or limited to one instance (e.g. separate HD and 4K Radarr)
 - Genre rules with ALL / ANY matching
 - Combined genres such as `Animation + Family`
 - Smart conditions: original language (`ja` or `Japanese`, several allowed), year-before, Arr tag ID
@@ -26,6 +27,7 @@
 - Radarr/Sonarr file-move task confirmation (failed moves are reported, not retried)
 - Free space tracked across a bulk move
 - Rule targets checked against Arr root folders when saved
+- Optional path mappings to detect destination folders on disk that Radarr/Sonarr do not know about
 - Move history + Undo of the latest move per title
 
 ### Automation & operations
@@ -34,7 +36,7 @@
 - Scheduled reconciliation scan
 - Scan progress + Stop
 - System Health page
-- Discord/Telegram notifications
+- Discord/Telegram notifications with a test button
 - Configuration export + restore
 - Jobs survive restarts; repeated scan results are de-duplicated and old preview history is pruned
 - Docker/Compose running as a non-root user (`PUID`/`PGID`) with a healthcheck
@@ -78,7 +80,7 @@ GenreArr data is stored in `/opt/genrearr/data`.
 The installer uses the latest GitHub release. To pin a version, or to try the development branch:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_VERSION=v0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_VERSION=v0.5.0 bash
 curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_VERSION=main bash
 ```
 
@@ -137,7 +139,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The tests run GenreArr against a small fake Radarr. GitHub Actions runs them, plus a Docker build and container check, on every push and pull request.
+The tests run GenreArr against a small fake Radarr. Both Radarr and Sonarr are covered. GitHub Actions runs them, plus a Docker build and container check, on every push and pull request.
 
 ## ☕ Support
 

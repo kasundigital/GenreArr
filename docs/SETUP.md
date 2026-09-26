@@ -109,6 +109,8 @@ Enter:
 
 Press **Add instance**, then **Test + roots**.
 
+Use **Edit** to change the name, URL or API key later (leave the API key empty to keep the current one). Editing keeps the webhook URL, so Radarr/Sonarr need no changes. **Disable** pauses an instance without deleting it. **New webhook URL** replaces the secret in the webhook address, for example if it leaked; update it in Radarr/Sonarr afterwards.
+
 A successful connection should report the root folders Radarr knows.
 
 ### If Radarr and GenreArr are in Docker
@@ -173,6 +175,10 @@ Priority: 10
 ```
 
 Because priority **10** is evaluated before **20**, the more specific Kids rule can win first.
+
+### Several Radarr or Sonarr instances
+
+By default a rule applies to **all** instances of its type. If you run, for example, one Radarr for HD and one for 4K with different root folders, choose **Only <instance>** in the rule's **Instance** field. The target is then checked against that instance's root folders only. Deleting an instance disables the rules limited to it.
 
 ### ALL vs ANY
 
@@ -241,6 +247,37 @@ Safety:
 ```
 
 Do not perform a live move if a safety check fails.
+
+### Optional: detect folders already on disk
+
+GenreArr normally only knows what Radarr/Sonarr know. If a folder with the same name already exists at the destination but is not in the library, the move could merge into it. To let GenreArr check the disk too, give it read-only access to your media and tell it how paths map.
+
+1. Create `/opt/genrearr/docker-compose.override.yml` (the installer never overwrites this file):
+
+   ```yaml
+   services:
+     genrearr:
+       volumes:
+         - /mnt/media/movies:/media/movies:ro
+         - /mnt/media/tv:/media/tv:ro
+   ```
+
+2. Run `cd /opt/genrearr && docker compose up -d`.
+3. In **Settings → Path mappings**, map each Radarr/Sonarr path to the path inside GenreArr, one per line:
+
+   ```text
+   /movies=/media/movies
+   /tv=/media/tv
+   ```
+
+If you run several instances of one type (for example an HD and a 4K Radarr that both call their folder `/movies` but are mounted in different places), prefix each line with the instance name so each instance is checked against its own disk:
+
+```text
+Radarr HD: /movies=/media/movies
+Radarr 4K: /movies=/media/movies4k
+```
+
+The Planner then shows **Destination folder not already on disk**. If a mapped root is missing inside the container, the check fails with **Destination root visible on disk**, so a broken mount never passes silently.
 
 ## 8. Test with Dry Run
 
@@ -334,13 +371,17 @@ Keep this disabled until your rules and live moves have been tested.
 
 Jobs are stored in the database. If GenreArr restarts during a job, the job shows as `interrupted`; run the scan again to continue.
 
+### Notifications
+
+Fill in the Discord webhook and/or Telegram bot token and chat ID in **Settings**, save, then press **Send test notification** to check that they work.
+
 ## 14. Backup your GenreArr settings
 
 Open **Settings → Backup / Restore**.
 
 Use **Export JSON** before making large changes. API keys and webhook secrets are not included, but the export can contain Discord/Telegram notification tokens, so keep it private.
 
-Use **Restore JSON** to restore rules/settings/exclusions from a compatible GenreArr backup.
+Use **Restore JSON** to restore rules/settings/exclusions from a compatible GenreArr backup. Rules limited to an instance are re-attached to the instance here with the same type and URL (or the same unique name). If none matches, the rule is imported disabled and unscoped; choose an instance before enabling it.
 
 ## Troubleshooting
 
@@ -413,7 +454,7 @@ Run the installer again — no Git is needed:
 curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
 ```
 
-Your `.env` and the `/opt/genrearr/data` directory (database) are kept, so updating does not erase your configuration.
+Your `.env`, `docker-compose.override.yml` and the `/opt/genrearr/data` directory (database) are kept, so updating does not erase your configuration. Files removed from GenreArr in a newer version are cleaned up automatically.
 
 ### Forgot the admin password
 
