@@ -119,16 +119,25 @@ def api(inst,path,method='GET',payload=None):
 def roots(inst): return api(inst,'rootfolder')
 def media_endpoint(media): return 'movie' if media=='movie' else 'series'
 def parse_mappings(text):
-    '''"arr_path=local_path" lines → [(arr_prefix, local_prefix)], longest Arr prefix first. Raises ValueError on bad lines.'''
+    '''Lines "/arr/path=/local/path", optionally prefixed "Instance name: " to apply to one instance only.
+    Returns [(instance name lowercased or None, arr_prefix, local_prefix)]. Raises ValueError on bad lines.'''
     out=[]
     for n,line in enumerate((text or '').splitlines(),1):
         line=line.strip()
         if not line or line.startswith('#'): continue
+        scope=None
+        if not line.startswith('/') and ':' in line:
+            scope,line=line.split(':',1); scope=scope.strip().lower(); line=line.strip()
         arr,sep,local=line.partition('=')
         arr=norm(arr.strip()); local=norm(local.strip())
-        if not sep or not arr.startswith('/') or not local.startswith('/'): raise ValueError(f'line {n}: use /arr/path=/local/path')
-        out.append((arr,local))
-    return sorted(out,key=lambda m:-len(m[0]))
+        if not sep or not arr.startswith('/') or not local.startswith('/') or scope=='': raise ValueError(f'line {n}: use /arr/path=/local/path or Instance name: /arr/path=/local/path')
+        out.append((scope,arr,local))
+    return out
+def mappings_for(inst,mappings):
+    '''Mappings that apply to this instance: its own lines first (they win), then shared lines; longest prefix first.'''
+    name=(inst['name'] or '').lower()
+    mine=[m for m in mappings if m[0]==name]; shared=[m for m in mappings if m[0] is None]
+    return [(a,l) for _,a,l in sorted(mine,key=lambda m:-len(m[1]))+sorted(shared,key=lambda m:-len(m[1]))]
 def local_path(path,mappings):
     '''Translate a Radarr/Sonarr path to where GenreArr can see it on disk, or None when no mapping covers it.'''
     p=norm(path)
@@ -222,7 +231,7 @@ def safety(ctx,x,target,new):
     checks.append({'label':'Not active in queue','ok':not ctx.busy(x)})
     paths=ctx.paths(); owner=paths.get(norm(new)) if paths is not None else None
     checks.append({'label':'No destination collision','ok':paths is not None and owner in (None,x.get('id'))})
-    try: mappings=parse_mappings(setting('path_mappings'))
+    try: mappings=mappings_for(ctx.inst,parse_mappings(setting('path_mappings')))
     except ValueError: mappings=[]
     local_root,local_new=local_path(target,mappings),local_path(new,mappings)
     if local_root:
@@ -267,7 +276,7 @@ def notify(text):
     results={}
     if setting('discord_webhook'):
         try: requests.post(setting('discord_webhook'),json={'content':text},timeout=10).raise_for_status(); results['Discord']=None
-        except Exception as e: results['Discord']=str(e)
+        except Exception as e: results['Discord']=str(e).replace(setting('discord_webhook'),'<discord webhook>')
     if setting('telegram_bot') and setting('telegram_chat'):
         try: requests.post(f"https://api.telegram.org/bot{setting('telegram_bot')}/sendMessage",json={'chat_id':setting('telegram_chat'),'text':text},timeout=10).raise_for_status(); results['Telegram']=None
         except Exception as e: results['Telegram']=str(e).replace(setting('telegram_bot'),'***')
@@ -578,7 +587,14 @@ def settings_page():
             if k in numeric and not numeric[k][0](v): errors.append(numeric[k][1]); continue
             if k=='path_mappings':
                 v=f.get(k,'').strip()
-                try: parse_mappings(v)
+                try:
+                    c=db(); names={(r['name'] or '').lower():r['type'] for r in c.execute('SELECT name,type FROM instances')}; c.close()
+                    parsed=parse_mappings(v); unknown=sorted({m[0] for m in parsed if m[0] and m[0] not in names})
+                    if unknown: raise ValueError('no instance named '+', '.join(unknown))
+                    # A shared line applies to every instance; with several instances of one type that is usually a mistake.
+                    multi=sorted({t.title() for t in names.values() if list(names.values()).count(t)>1})
+                    if multi and any(m[0] is None for m in parsed):
+                        flash(f"Note: you have several {' and '.join(multi)} instances. Lines without an instance name apply to all of them — prefix lines with the instance name (e.g. \"Radarr 4K: /movies=/media/movies4k\") if they are mounted at different paths.")
                 except ValueError as e: errors.append(f'Path mappings not changed: {e}'); continue
             if k in ('fallback_movie','fallback_series') and v and v!=setting(k):
                 err,_=check_target('movie' if k=='fallback_movie' else 'series',v)
@@ -700,13 +716,25 @@ def import_config():
     try:
         f=request.files.get('file')
         if not f: raise ValueError('no file uploaded')
-        rules,excl,sets=parse_import(json.load(f))
-        c=db(); known={r['id']:media_of(r) for r in c.execute('SELECT id,type FROM instances')}
-        # Instance ids are local to one install: a rule scoped to an instance that does not exist here is imported disabled.
+        data=json.load(f); rules,excl,sets=parse_import(data)
+        c=db(); local=[dict(r) for r in c.execute('SELECT id,name,type,url FROM instances')]
+        # Instance ids are local to one install (id 1 exists almost everywhere), so a scoped rule is re-attached by
+        # the exported instance's type + URL, or its unique name. Anything else is imported disabled and unscoped.
+        exported={to_int(i.get('id')):i for i in data.get('instances',[]) or [] if isinstance(i,dict)}
+        def remap(iid):
+            src=exported.get(iid)
+            if not src: return None
+            same=[l for l in local if l['type']==src.get('type')]
+            by_url=[l for l in same if norm(l['url'])==norm(src.get('url'))]
+            by_name=[l for l in same if (l['name'] or '').lower()==str(src.get('name') or '').lower()]
+            hit=by_url if len(by_url)==1 else by_name if len(by_name)==1 else []
+            return hit[0]['id'] if hit else None
         fixed=[]; orphans=0
         for r in rules:
-            iid=r[9]
-            if iid is not None and known.get(iid)!=r[0]: r=(*r[:4],0,*r[5:]); orphans+=1
+            if r[9] is not None:
+                new=remap(r[9])
+                if new is None: r=(*r[:4],0,*r[5:9],None); orphans+=1
+                else: r=(*r[:9],new)
             fixed.append(r)
         rules=fixed
         try:
@@ -716,7 +744,7 @@ def import_config():
                 c.executemany('INSERT INTO exclusions(media_type,match_type,pattern,enabled) VALUES(?,?,?,?)',excl)
                 c.executemany('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v',sets)
         finally: c.close()
-        flash(f'Configuration restored: {len(rules)} rule(s), {len(excl)} exclusion(s), {len(sets)} setting(s)'+(f' — {orphans} rule(s) were limited to an instance that does not exist here and were disabled' if orphans else ''))
+        flash(f'Configuration restored: {len(rules)} rule(s), {len(excl)} exclusion(s), {len(sets)} setting(s)'+(f' — {orphans} rule(s) were limited to an instance that could not be matched here; they were disabled, choose an instance before enabling them' if orphans else ''))
     except Exception as e: flash(f'Restore failed: {e}')
     return redirect('/settings')
 @app.get('/health')

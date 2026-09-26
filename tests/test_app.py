@@ -1,4 +1,4 @@
-import io, json, time
+import io, json, re, time
 from conftest import post, login
 
 def wait(pred, timeout=10):
@@ -221,11 +221,22 @@ def test_path_mapping_detects_folder_on_disk(main, client, tmp_path):
     main.set_setting('path_mappings', '/movies=/does/not/exist')
     assert 'visible on disk' in decisions(main)[2]['reason']
 
-def test_local_path_longest_prefix(main):
-    m = main.parse_mappings('/movies=/a\n/movies/Kids=/b\n# comment\n')
+def test_local_path_longest_prefix_and_instance_scope(main):
+    parsed = main.parse_mappings('/movies=/a\n/movies/Kids=/b\n# comment\nRadarr 4K: /movies=/c\n')
+    hd, uhd = {'name': 'Radarr HD'}, {'name': 'radarr 4k'}
+    m = main.mappings_for(hd, parsed)
     assert main.local_path('/movies/Kids/X', m) == '/b/X'
     assert main.local_path('/movies/Y', m) == '/a/Y'
     assert main.local_path('/moviesX/Y', m) is None and main.local_path('/tv/Y', m) is None
+    assert main.local_path('/movies/Y', main.mappings_for(uhd, parsed)) == '/c/Y'   # instance line wins
+
+def test_path_mapping_validation(main, client):
+    base = {'dry_run': '1', 'poll_seconds': '3600', 'min_free_gb': '5', 'retry_attempts': '2', 'history_days': '30'}
+    r = post(client, '/settings', {**base, 'path_mappings': 'Nope: /movies=/x'}, follow_redirects=True)
+    assert 'no instance named nope' in r.get_data(as_text=True)
+    post(client, '/instances', {'name': 'R2', 'type': 'radarr', 'url': client.arr.url, 'api_key': 'k'})
+    r = post(client, '/settings', {**base, 'path_mappings': '/movies=/x'}, follow_redirects=True)
+    assert 'several Radarr instances' in r.get_data(as_text=True) and main.setting('path_mappings') == '/movies=/x'
 
 # --- notifications -------------------------------------------------------------
 def test_notification_test_button(main, client, monkeypatch):
@@ -243,11 +254,24 @@ def test_export_import_keeps_rule_scope(main, client):
     iid = main.db().execute('SELECT id FROM instances').fetchone()[0]
     add_rule(client, genre='Horror', target_root='/movies/Horror', instance_id=str(iid))
     exp = client.get('/api/export').get_json()
-    exp['rules'].append(dict(exp['rules'][0], instance_id=999))
+    # A backup from another install: its instance 7 is this install's Radarr (same URL), its instance 1 is unknown here.
+    exp['instances'] = [{'id': 7, 'name': 'Other name', 'type': 'radarr', 'url': client.arr.url},
+                        {'id': iid, 'name': 'Elsewhere', 'type': 'radarr', 'url': 'http://elsewhere:7878'}]
+    exp['rules'] = [dict(exp['rules'][0], instance_id=7), dict(exp['rules'][0], instance_id=iid)]
     r = post(client, '/api/import', {'file': (io.BytesIO(json.dumps(exp).encode()), 'x.json')}, content_type='multipart/form-data', follow_redirects=True)
-    assert '1 rule(s) were limited to an instance that does not exist here' in r.get_data(as_text=True)
+    assert '1 rule(s) were limited to an instance that could not be matched here' in r.get_data(as_text=True)
     rows = main.db().execute('SELECT instance_id,enabled FROM rules ORDER BY id').fetchall()
-    assert [tuple(x) for x in rows] == [(iid, 1), (999, 0)]
+    assert [tuple(x) for x in rows] == [(iid, 1), (None, 0)]   # id collision does NOT attach to the wrong instance
+
+def test_discord_webhook_redacted_in_errors(main, client, monkeypatch):
+    hook = 'https://discord.example/api/webhooks/123/SECRET'
+    def boom(url, **kw): raise main.requests.HTTPError(f'404 Client Error: Not Found for url: {url}')
+    monkeypatch.setattr(main.requests, 'post', boom)
+    main.set_setting('discord_webhook', hook)
+    html = post(client, '/settings/notify-test', follow_redirects=True).get_data(as_text=True)
+    main.set_setting('discord_webhook', '')
+    flashes = re.findall(r'<div class="flash">(.*?)</div>', html)
+    assert any('Discord: failed' in f for f in flashes) and not any('SECRET' in f for f in flashes)
 
 def test_every_page_renders(main, client):
     add_rule(client, genre='Horror', target_root='/movies/Horror')

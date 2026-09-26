@@ -270,6 +270,13 @@ GenreArr normally only knows what Radarr/Sonarr know. If a folder with the same 
    /tv=/media/tv
    ```
 
+If you run several instances of one type (for example an HD and a 4K Radarr that both call their folder `/movies` but are mounted in different places), prefix each line with the instance name so each instance is checked against its own disk:
+
+```text
+Radarr HD: /movies=/media/movies
+Radarr 4K: /movies=/media/movies4k
+```
+
 The Planner then shows **Destination folder not already on disk**. If a mapped root is missing inside the container, the check fails with **Destination root visible on disk**, so a broken mount never passes silently.
 
 ## 8. Test with Dry Run
@@ -374,7 +381,7 @@ Open **Settings → Backup / Restore**.
 
 Use **Export JSON** before making large changes. API keys and webhook secrets are not included, but the export can contain Discord/Telegram notification tokens, so keep it private.
 
-Use **Restore JSON** to restore rules/settings/exclusions from a compatible GenreArr backup. Rules limited to an instance that does not exist on this install are imported disabled; re-enable them after choosing an instance.
+Use **Restore JSON** to restore rules/settings/exclusions from a compatible GenreArr backup. Rules limited to an instance are re-attached to the instance here with the same type and URL (or the same unique name). If none matches, the rule is imported disabled and unscoped; choose an instance before enabling it.
 
 ## Troubleshooting
 
