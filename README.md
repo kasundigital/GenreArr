@@ -2,20 +2,20 @@
 
 **Smart library routing for Radarr & Sonarr.** GenreArr evaluates imported media and asks the Arr API to move it to the correct root folder. It does not blindly move files at filesystem level.
 
-## ✨ v0.3.0 development build
+## ✨ v0.4.0
 
 ### Routing
 - Multiple Radarr and Sonarr instances
 - Genre rules with ALL / ANY matching
 - Combined genres such as `Animation + Family`
-- Smart conditions: original language, year-before, Arr tag ID
+- Smart conditions: original language (`ja` or `Japanese`, several allowed), year-before, Arr tag ID
 - Priority ordering, enable/disable/edit rules
 - Separate movie/series fallback roots
 - Title/path/tag exclusions
 
 ### Safety
 - Dry Run enabled by default
-- Library Planner with Current → Proposed paths
+- Library Planner with Current → Proposed paths, search, filters and paging
 - Selective bulk moves
 - Arr root-folder validation
 - Minimum destination free-space validation
@@ -23,7 +23,10 @@
 - Destination path collision detection
 - Post-move API path verification
 - Configurable automatic retries
-- Move history + Undo
+- Radarr/Sonarr file-move task confirmation (failed moves are reported, not retried)
+- Free space tracked across a bulk move
+- Rule targets checked against Arr root folders when saved
+- Move history + Undo of the latest move per title
 
 ### Automation & operations
 - Per-instance Radarr/Sonarr webhook
@@ -33,7 +36,9 @@
 - System Health page
 - Discord/Telegram notifications
 - Configuration export + restore
-- Docker/Compose, admin login, responsive dark/light UI
+- Jobs survive restarts; repeated scan results are de-duplicated and old preview history is pruned
+- Docker/Compose running as a non-root user (`PUID`/`PGID`) with a healthcheck
+- Admin login (hashed password, changeable in Settings, CSRF-protected forms, rate limited), responsive dark/light UI
 
 ## 👋 New to GenreArr?
 
@@ -70,6 +75,13 @@ http://YOUR-SERVER-IP:3033
 
 GenreArr data is stored in `/opt/genrearr/data`.
 
+The installer uses the latest GitHub release. To pin a version, or to try the development branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_VERSION=v0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo GENREARR_VERSION=main bash
+```
+
 ### Update later
 
 Run the same command again:
@@ -81,6 +93,17 @@ curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.
 The existing `.env` and persistent `data` directory are retained.
 
 > Docker and the Docker Compose plugin must already be installed. No `git clone` is required.
+
+## 🔒 Reverse proxy / HTTPS
+
+GenreArr does not serve HTTPS itself. Put it behind nginx, Caddy or Traefik and add to `/opt/genrearr/.env`:
+
+```text
+TRUST_PROXY=1
+COOKIE_SECURE=1
+```
+
+`TRUST_PROXY=1` makes login rate limiting use the real client IP; `COOKIE_SECURE=1` only sends the login cookie over HTTPS. Then run `cd /opt/genrearr && docker compose up -d`.
 
 ## 🔗 Webhook
 
@@ -106,6 +129,15 @@ Add the instance in GenreArr. Copy its unique webhook path and add it in **Radar
 7. Confirm both the physical media path and Radarr's displayed path.
 8. Test webhook import sorting.
 9. Repeat for Sonarr before production use.
+
+## 🛠️ Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The tests run GenreArr against a small fake Radarr. GitHub Actions runs them, plus a Docker build and container check, on every push and pull request.
 
 ## ☕ Support
 
