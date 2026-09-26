@@ -2,7 +2,7 @@
 
 **Smart library routing for Radarr & Sonarr.** GenreArr evaluates imported media and asks the Arr API to move it to the correct root folder. It does not blindly move files at filesystem level.
 
-## ✨ v0.3.0 development build
+## ✨ v0.3.1 development build
 
 ### Routing
 - Multiple Radarr and Sonarr instances
@@ -33,7 +33,7 @@
 - System Health page
 - Discord/Telegram notifications
 - Configuration export + restore
-- Docker/Compose, admin login, responsive dark/light UI
+- Docker/Compose, admin login (hashed password, changeable in Settings, CSRF-protected forms), responsive dark/light UI
 
 ## 👋 New to GenreArr?
 

@@ -301,7 +301,7 @@ In Radarr or Sonarr:
 5. Enable download/import-related events.
 6. Save and test the connection.
 
-After a completed import, GenreArr can evaluate that title automatically.
+After a completed import, GenreArr evaluates that title automatically. It waits about 20 seconds first so Radarr/Sonarr can finish the import (set `WEBHOOK_DELAY` in seconds to change this). Moves only happen when Dry Run is off.
 
 ## 12. Health page
 
@@ -326,7 +326,7 @@ Keep this disabled until your rules and live moves have been tested.
 
 Open **Settings → Backup / Restore**.
 
-Use **Export JSON** before making large changes. The export contains GenreArr configuration, so keep it private because instance information may be sensitive.
+Use **Export JSON** before making large changes. API keys and webhook secrets are not included, but the export can contain Discord/Telegram notification tokens, so keep it private.
 
 Use **Restore JSON** to restore rules/settings/exclusions from a compatible GenreArr backup.
 
@@ -381,23 +381,27 @@ Press **Ctrl+C** to stop viewing logs; this does not stop GenreArr.
 ### Restart GenreArr
 
 ```bash
+cd /opt/genrearr
 docker compose restart
 ```
 
 ### Update GenreArr
 
-From the GenreArr directory:
+Run the installer again — no Git is needed:
 
 ```bash
-git pull
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/kasundigital/GenreArr/main/install.sh | sudo bash
 ```
 
-The `./data:/data` volume stores the GenreArr database so normal container recreation does not intentionally erase it.
+Your `.env` and the `/opt/genrearr/data` directory (database) are kept, so updating does not erase your configuration.
+
+### Forgot the admin password
+
+Edit `ADMIN_PASSWORD=` in `/opt/genrearr/.env` to a new value, then run `cd /opt/genrearr && docker compose up -d`. A changed `ADMIN_PASSWORD` in `.env` always replaces the current password.
 
 ## Safe first-time checklist
 
-- [ ] Changed the default admin password
+- [ ] Saved the generated admin password (or changed it in **Settings → Admin password**)
 - [ ] Added Radarr/Sonarr successfully
 - [ ] Test + roots works
 - [ ] Rules use exact Arr-visible root paths
